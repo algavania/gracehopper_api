@@ -1,16 +1,26 @@
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework import status
+from rest_framework.response import Response
 from .models import Category
 from .serializers import CategorySerializer
 from apps.api.utils.response_formatter import format_response
 from apps.api.utils.exceptions import ApiException
+from django.core.cache import cache
+from apps.api.constants.redis import REDIS_KEY_CATEGORIES
+from apps.api.utils.util import get_cache_key, delete_cache_by_pattern
 
 
 class CategoryListView(APIView):
     def get(self, request):
         try:
-            
+            cache_key = get_cache_key(
+                REDIS_KEY_CATEGORIES, request.query_params)
+
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return Response(cached_data)
+
             categories = Category.objects.all()
 
             paginator = PageNumberPagination()
@@ -18,7 +28,7 @@ class CategoryListView(APIView):
 
             try:
                 paginated_categories = paginator.paginate_queryset(
-                categories, request)
+                    categories, request)
             except Exception as e:
                 raise ApiException(
                     message=str(e),
@@ -41,6 +51,7 @@ class CategoryListView(APIView):
                 "previous": paginator_data.data['previous'],
             })
 
+            cache.set(cache_key, formatted_response.data)
             return formatted_response
         except ApiException as e:
             return format_response(
@@ -48,7 +59,7 @@ class CategoryListView(APIView):
                 message=e.message,
                 data=None,
                 status_code=e.status_code,
-            ) 
+            )
         except Exception as e:
             return format_response(
                 success=False,
@@ -62,6 +73,8 @@ class CategoryListView(APIView):
             serializer = CategorySerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save()
+                delete_cache_by_pattern(f"{REDIS_KEY_CATEGORIES}*")
+                
                 return format_response(
                     success=True,
                     message="Category created successfully.",
@@ -86,14 +99,21 @@ class CategoryListView(APIView):
 class CategoryDetailView(APIView):
     def get(self, _, id):
         try:
+            cache_key = get_cache_key(REDIS_KEY_CATEGORIES, {"id": id})
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return Response(cached_data)
             category = Category.objects.get(id=id)
             serializer = CategorySerializer(category)
-            return format_response(
+            
+            response = format_response(
                 success=True,
                 message="Category retrieved successfully.",
                 data=serializer.data,
                 status_code=status.HTTP_200_OK,
             )
+            cache.set(cache_key, response.data)
+            return response
         except Category.DoesNotExist:
             return format_response(
                 success=False,
@@ -115,6 +135,7 @@ class CategoryDetailView(APIView):
             serializer = CategorySerializer(category, data=request.data)
             if serializer.is_valid():
                 serializer.save()
+                delete_cache_by_pattern(f"{REDIS_KEY_CATEGORIES}*")
                 return format_response(
                     success=True,
                     message="Category updated successfully.",
@@ -146,6 +167,7 @@ class CategoryDetailView(APIView):
         try:
             category = Category.objects.get(id=id)
             category.delete()
+            delete_cache_by_pattern(f"{REDIS_KEY_CATEGORIES}*")
             return format_response(
                 success=True,
                 message="Category deleted successfully.",

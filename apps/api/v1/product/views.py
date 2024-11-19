@@ -6,11 +6,22 @@ from .serializers import ProductSerializer
 from apps.api.utils.response_formatter import format_response
 from apps.api.utils.exceptions import ApiException
 from .filters import ProductFilter
+from django.core.cache import cache
+from apps.api.constants.redis import REDIS_KEY_PRODUCTS
+from apps.api.utils.util import get_cache_key, delete_cache_by_pattern
+from rest_framework.response import Response
 
 
 class ProductListView(APIView):
     def get(self, request):
         try:
+            cache_key = get_cache_key(
+                REDIS_KEY_PRODUCTS, request.query_params)
+
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return Response(cached_data)
+
             filterset = ProductFilter(
                 request.query_params, queryset=Product.objects.all())
 
@@ -49,6 +60,7 @@ class ProductListView(APIView):
                 "next": paginator_data.data['next'],
                 "previous": paginator_data.data['previous'],
             })
+            cache.set(cache_key, formatted_response.data)
 
             return formatted_response
 
@@ -72,6 +84,7 @@ class ProductListView(APIView):
             serializer = ProductSerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save()
+                delete_cache_by_pattern(f"{REDIS_KEY_PRODUCTS}*")
                 return format_response(
                     success=True,
                     message="Product created successfully.",
@@ -96,14 +109,22 @@ class ProductListView(APIView):
 class ProductDetailView(APIView):
     def get(self, _, id):
         try:
+            cache_key = get_cache_key(REDIS_KEY_PRODUCTS, {"id": id})
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return Response(cached_data)
+            
             product = Product.objects.get(id=id)
             serializer = ProductSerializer(product)
-            return format_response(
+            response = format_response(
                 success=True,
                 message="Product retrieved successfully.",
                 data=serializer.data,
                 status_code=status.HTTP_200_OK,
             )
+            
+            cache.set(cache_key, response.data)
+            return response
         except Product.DoesNotExist:
             return format_response(
                 success=False,
@@ -125,6 +146,7 @@ class ProductDetailView(APIView):
             serializer = ProductSerializer(product, data=request.data)
             if serializer.is_valid():
                 serializer.save()
+                delete_cache_by_pattern(f"{REDIS_KEY_PRODUCTS}*")
                 return format_response(
                     success=True,
                     message="Product updated successfully.",
@@ -156,6 +178,7 @@ class ProductDetailView(APIView):
         try:
             product = Product.objects.get(id=id)
             product.delete()
+            delete_cache_by_pattern(f"{REDIS_KEY_PRODUCTS}*")
             return format_response(
                 success=True,
                 message="Product deleted successfully.",
